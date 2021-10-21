@@ -3,6 +3,6 @@ A simple canvas raster map viewer where you can zoom in and out with the scrollw
 
 ## Demo
 
-[https://benjaco.github.io/rastermap-viewer/](Demo)
+[Demo](https://benjaco.github.io/rastermap-viewer/)
 
 The example map uses openstreetmap.org

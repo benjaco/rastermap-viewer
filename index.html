@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Rastermap viewer</title>
+    <style>
+    *{
+        margin: 0;
+        padding: 0;
+    }
+    canvas{
+        width: 500px;
+        height: 500px;
+    }
+    body{
+        overscroll-behavior-y: none;
+
+    }
+    </style>
+</head>
+<body>
+    <canvas width="500" height="500"></canvas>
+    <script>
+        const canvas = document.getElementsByTagName("canvas")[0];
+        const ctx = canvas.getContext("2d");
+        let scale = 9;
+
+        function clamp(val, min, max){
+            return Math.max(Math.min(val, max), min);
+        }
+
+
+        class Layer{
+            constructor(map, zoom){
+                this.map = map;
+                this.zoom = zoom;
+
+                this.maxIndex = Math.pow(2,this.zoom);
+
+                this.tiles = []
+                this.statuses = []
+                this.outstandings = 0;
+            }
+
+            render(){
+                let tileBaseWidth = Math.pow(2, this.zoom+scale);
+                let zoomBase = Math.pow(2, this.map.zoom+scale);
+                let width = zoomBase * (zoomBase/tileBaseWidth);
+
+                
+                // console.log("zooms", this.zoom, "tilebase", tileBaseWidth, "zoombase", zoomBase, "renderWidth", width)
+
+
+                let centerTileX = clamp(Math.round(this.map.centerXat0 * this.maxIndex), 0, this.maxIndex-1);
+                let centerTileY = clamp(Math.round(this.map.centerYat0 * this.maxIndex), 0, this.maxIndex-1);
+
+
+               // console.log(centerTileX, centerTileY)
+
+                let offsetX = (this.map.centerXat0 * this.maxIndex) * width * -1 + 0.5*this.map.width;
+                let offsetY = (this.map.centerYat0 * this.maxIndex) * width * -1 + 0.5*this.map.height;
+                let tilesToDrawXbothDir = Math.ceil(this.map.width / width / 2);
+                let tilesToDrawYbothDir = Math.ceil(this.map.height / width / 2);
+
+                for(    let x = centerTileX-tilesToDrawXbothDir-1; x <= centerTileX+tilesToDrawXbothDir; x++){
+                    for(let y = centerTileY-tilesToDrawYbothDir-1; y <= centerTileY+tilesToDrawYbothDir; y++){
+                        if(x < 0 || x >= this.maxIndex || y < 0 || y >= this.maxIndex) continue;
+
+                        if(this.statuses[x+"-"+y] === undefined){
+                            this.statuses[x+"-"+y] = "loading"
+                            this.outstandings++;
+                            this.getImage(x, y, this.zoom).then(img => {
+                                this.tiles[x+"-"+y] = img;
+                                this.statuses[x+"-"+y] = "loaded";
+                                this.outstandings--;
+                                this.map.updateNeeded = true;
+                            }).catch(_ => {
+                                this.statuses[x+"-"+y] = undefined;
+                                this.outstandings--;
+                            })
+                        }
+
+
+                        if(this.statuses[x+"-"+y] === "loaded"){
+                            this.map.ctx.drawImage(this.tiles[x+"-"+y],
+                                width*x + offsetX, width*y + offsetY, 
+                                width, width
+                            );
+                        }
+                    }
+                }
+
+            }
+            getImage(x,y,z){
+                return new Promise((resolve, reject) => {
+                    var img = new Image;
+                    img.onload = function(){
+                        resolve(img)
+                    };
+                    img.onerror = function(){
+                        reject()
+                    };
+                    img.src = this.url(x,y,z);
+                })
+            }
+            url(x,y,z){
+                return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
+            }
+        }
+        class Map{
+            constructor(element, ctx){
+                this.element = element;
+                this.ctx = ctx;
+
+                this.zoom = .5;
+                this.centerXat0 = 0.5;
+                this.centerYat0 = 0.5;
+
+                this.width = 0;
+                this.height = 0;
+                this.updateDimensions()
+
+
+                this.updateNeeded = true;
+
+                this.layers = []
+                for(let i = 0; i<=19; i++){
+                    this.layers[i] = new Layer(this, i);
+                }
+
+                requestAnimationFrame(_=>this.raf())
+
+
+
+
+                this.downAt = false;
+                this.lastMousePosition = {x:0, y:0}
+                this.element.addEventListener("mousedown", e => {
+                    this.downAt = {
+                        lastX: e.pageX,
+                        lastY: e.pageY,
+
+                        centerXat0: this.centerXat0,
+                        centerYat0: this.centerYat0,
+                    }
+                })
+                
+                this.element.addEventListener("mousemove", e => {
+                    this.lastMousePosition.x = e.pageX;
+                    this.lastMousePosition.y = e.pageY;
+                    if(this.downAt === false) return;
+                    let tileBaseWidth = Math.pow(2, 0+scale);
+                    let zoomBase = Math.pow(2, this.zoom+scale);
+                    let width = zoomBase * (zoomBase/tileBaseWidth);
+
+                    let movePerPx = 1/width;
+
+                    let deltaX =  this.downAt.lastX - e.pageX;
+                    let deltaY = this.downAt.lastY - e.pageY;
+
+                    this.centerXat0 += deltaX * movePerPx;
+                    this.centerYat0 += deltaY * movePerPx;
+
+                    this.downAt.lastX =  e.pageX;
+                    this.downAt.lastY =  e.pageY;
+
+                    this.updateNeeded = true;
+
+
+                })
+                this.element.addEventListener("mouseup", e => {
+                    this.downAt = false;                    
+                })
+                this.element.addEventListener("mousewheel", e => {
+                    let zoomBefore = this.zoom;
+                    this.zoom += e.wheelDeltaY / 250;
+                    this.zoom = Math.max(0, Math.min(this.zoom, 19));
+
+                    let zoomBaseBefore = Math.pow(2, zoomBefore+scale);
+                    let zoomBaseAfter = Math.pow(2, this.zoom+scale);
+                    let tileBaseWidth = Math.pow(2, 0+scale);
+
+                    let widthBefore = zoomBaseBefore * (zoomBaseBefore/tileBaseWidth);
+                    let widthAfter = zoomBaseAfter * (zoomBaseAfter/tileBaseWidth);
+
+
+                    let mousePxXAwayFromCenter = (this.lastMousePosition.x - this.width/2 )
+                    let mousePxYAwayFromCenter = (this.lastMousePosition.y - this.height/2 )
+
+
+                    let mouseUnitX_AFCBefore = mousePxXAwayFromCenter / widthBefore;
+                    let mouseUnitY_AFCBefore = mousePxYAwayFromCenter / widthBefore;
+
+                    let mouseUnitX_AFCAfter = mousePxXAwayFromCenter / widthAfter;
+                    let mouseUnitY_AFCAfter = mousePxYAwayFromCenter / widthAfter;
+
+                    
+                    this.centerXat0 -= mouseUnitX_AFCAfter-mouseUnitX_AFCBefore;
+                    this.centerYat0 -= mouseUnitY_AFCAfter-mouseUnitY_AFCBefore;
+
+                    this.updateNeeded = true;
+                })
+
+                window.addEventListener("resize", e => this.updateDimensions())
+            }
+
+            updateDimensions(){
+                this.width = window.innerWidth;
+                this.height = window.innerHeight;
+                this.element.width = this.width;
+                this.element.height = this.height;
+                this.element.style.width = this.width+"px";
+                this.element.style.height = this.height+"px";
+
+                this.updateNeeded = true;
+            }
+
+            raf(){
+                if(this.updateNeeded){
+                    console.log("draw")
+
+                    ctx.clearRect(0,0,this.width, this.height)
+
+                    let targetZoom = Math.min( Math.ceil(Math.pow(this.zoom, 1.25)) + (window.devicePixelRatio - 1) + 3, 19);
+
+                    let backupLayer = targetZoom-1;
+                    while(backupLayer >= 0){
+                        if(this.layers[backupLayer].outstandings === 0){
+                            this.layers[backupLayer].render();
+                            break
+                        }
+                        backupLayer --;
+                    }
+                    
+                    this.layers[targetZoom].render();
+
+                    this.updateNeeded = false;
+                }
+
+
+                requestAnimationFrame(_=>this.raf())
+            }
+        }
+
+        new Map(canvas, ctx);
+    
+    </script>
+</body>
+</html>

@@ -22,6 +22,7 @@
 </head>
 <body>
     <canvas width="500" height="500"></canvas>
+
     <small style="position: absolute; bottom: 2px; right: 2px;">openstreetmap.org</small>
 
     <script>
@@ -35,8 +36,9 @@
 
 
         class Layer{
-            constructor(map, zoom){
+            constructor(map, url, zoom){
                 this.map = map;
+                this.url = url.replace("{z}", zoom);
                 this.zoom = zoom;
 
                 this.maxIndex = Math.pow(2,this.zoom);
@@ -47,6 +49,7 @@
             }
 
             render(){
+                
                 let tileBaseWidth = Math.pow(2, this.zoom+scale);
                 let zoomBase = Math.pow(2, this.map.zoom+scale);
                 let width = zoomBase * (zoomBase/tileBaseWidth);
@@ -73,7 +76,7 @@
                         if(this.statuses[x+"-"+y] === undefined){
                             this.statuses[x+"-"+y] = "loading"
                             this.outstandings++;
-                            this.getImage(x, y, this.zoom).then(img => {
+                            this.getImage(x, y).then(img => {
                                 this.tiles[x+"-"+y] = img;
                                 this.statuses[x+"-"+y] = "loaded";
                                 this.outstandings--;
@@ -95,7 +98,7 @@
                 }
 
             }
-            getImage(x,y,z){
+            getImage(x,y){
                 return new Promise((resolve, reject) => {
                     var img = new Image;
                     img.onload = function(){
@@ -104,11 +107,37 @@
                     img.onerror = function(){
                         reject()
                     };
-                    img.src = this.url(x,y,z);
+                    img.src = this.getUrl(x,y);
                 })
             }
-            url(x,y,z){
-                return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`
+            getUrl(x,y){
+                return this.url.replace("{x}", x).replace("{y}", y);
+            }
+        }
+        class SourceLayer{
+            constructor(map, url, basemap, depth){
+                this.url = url;
+                this.map = map;
+                this.basemap = basemap;
+                this.depth = depth;
+
+                this.layers = []
+                for(let i = 0; i<=this.depth; i++){
+                    this.layers[i] = new Layer(this.map, this.url, i);
+                }
+            }
+            render(targetZoom){
+                targetZoom = Math.min(targetZoom, this.depth)
+                let backupLayer = targetZoom-1;
+                while(backupLayer >= 0 && this.basemap){
+                    if(this.layers[backupLayer].outstandings === 0){
+                        this.layers[backupLayer].render();
+                        break
+                    }
+                    backupLayer --;
+                }
+                
+                this.layers[targetZoom].render();
             }
         }
         class Map{
@@ -124,14 +153,11 @@
                 this.height = 0;
                 this.updateDimensions()
 
+                this.layers = []
 
                 this.updateNeeded = true;
 
-                this.layers = []
-                for(let i = 0; i<=19; i++){
-                    this.layers[i] = new Layer(this, i);
-                }
-
+               
                 requestAnimationFrame(_=>this.raf())
 
 
@@ -208,6 +234,11 @@
                 window.addEventListener("resize", e => this.updateDimensions())
             }
 
+            addSorce(url, depth = 19){
+                this.layers.push(new SourceLayer(this, url, this.layers.length === 0, depth))
+                this.updateNeeded = true;
+            }
+
             updateDimensions(){
                 this.width = window.innerWidth;
                 this.height = window.innerHeight;
@@ -225,18 +256,9 @@
 
                     ctx.clearRect(0,0,this.width, this.height)
 
-                    let targetZoom = Math.min( Math.ceil(Math.pow(this.zoom, 1.25)) + (Math.round(window.devicePixelRatio) - 1) + 3, 19);
+                    let targetZoom = Math.min( Math.ceil(Math.pow(this.zoom, 1.25)) + Math.round(window.devicePixelRatio - 1) + 3, 19);
 
-                    let backupLayer = targetZoom-1;
-                    while(backupLayer >= 0){
-                        if(this.layers[backupLayer].outstandings === 0){
-                            this.layers[backupLayer].render();
-                            break
-                        }
-                        backupLayer --;
-                    }
-                    
-                    this.layers[targetZoom].render();
+                    for(let layer of this.layers) layer.render(targetZoom);                    
 
                     this.updateNeeded = false;
                 }
@@ -246,8 +268,9 @@
             }
         }
 
-        new Map(canvas, ctx);
-    
+        let map = new Map(canvas, ctx);
+        map.addSorce(`https://tile.openstreetmap.org/{z}/{x}/{y}.png`)
+        map.addSorce(`http://tiles.openseamap.org/seamark/{z}/{x}/{y}.png`, 18)
     </script>
 </body>
 </html>
